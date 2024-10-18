@@ -3,10 +3,9 @@ Clase Forecast
 "
 Class {
 	#name : 'Forecast',
-	#superclass : 'AnObsoleteBottlegram',
+	#superclass : 'Bottlegram',
 	#instVars : [
-		'city',
-		'country'
+		'webClient'
 	],
 	#category : 'Bottlegram-ForeCast',
 	#package : 'Bottlegram-ForeCast'
@@ -14,94 +13,149 @@ Class {
 
 { #category : 'action' }
 Forecast >> defaultText: aMessage [
-	^ aMessage answer: 'XD'
+	^ aMessage send: 'Ha enviado un mensaje por default.'.
 ]
 
 { #category : 'as yet unclassified' }
-Forecast >> generateDocument: aWeather [
-	| a1 a2 a3 table hourly hourlyUnits time temperature humidity rain|
-	table := 'Clima del dia ', Date today yyyymmdd, String cr. 
-	
-	hourly := aWeather at: 'hourly'.
-	hourlyUnits := aWeather at: 'hourly_units'. 
-	a1 := hourlyUnits at: 'temperature_2m'.
-	a2 := hourlyUnits at: 'relative_humidity_2m'.
-	a3 := hourlyUnits at: 'rain'.
-	
-	
-	time := hourly at: 'time'.
-	temperature := hourly at: 'temperature_2m'.
-	humidity := hourly at: 'relative_humidity_2m'.
-	rain := hourly at: 'rain'.
-	
-	time withIndexDo: [ :each :i | table := table, 'Hora: ', (DateAndTime fromString: each) hour24 asString, ' Temperatura: ', (temperature at: i) asString, a1, ' Humedad: ', (humidity at: i) asString, a2, ' Lluvia: ', (rain at: i) asString, a3, '.', String cr].
-
-	^ table 
-]
-
-{ #category : 'as yet unclassified' }
-Forecast >> getCoordinates: aCity country: aCountry [ 		
-	| array response result |
-	
-	response := (ZnClient new)
-				url:'https://geocoding-api.open-meteo.com/v1/search?name=',aCity,'&count=10&language=en&format=json';    
-				get;
-				response. 
-				
-	array := (STONJSON fromString: response contents) at: 'results'.
-	
-	result := array select: [ :each | (each at: 'country') = 'Argentina'].
-	
-	result ifNotEmpty: [
-        ^ (result first at: 'latitude') -> (result first at: 'longitude')
+Forecast >> findCoordinatesIn: results forCountry: aCountry [ 
+    | filteredResults |
+    filteredResults := results select: [ :each | (each at: 'country') = aCountry ].
+    filteredResults ifNotEmpty: [
+        ^ (filteredResults first at: 'latitude') -> (filteredResults first at: 'longitude')
     ] ifEmpty: [
-        ^ 'No se encontraron coordenadas para ', aCity, ' en ', aCountry.
+        ^ nil
     ].
 ]
 
-{ #category : 'as yet unclassified' }
-Forecast >> getWeatherForCity: aCity country: aCountry [
-    | coordinates latitude longitude weatherData |
+{ #category : 'formatting' }
+Forecast >> generateWeatherDocumentFor: aWeather [
+    | document |
+    document := WeatherDocument new initializeWeatherHeaderWithData: aWeather.
+    ^ document generateWeatherReportDocument.
+]
 
+{ #category : 'as yet unclassified' }
+Forecast >> getCoordinates: aCity country: aCountry [ 
+    | results coordinates |
+    results := (self webClient) fetchCoordinatesForCity: aCity.
+    coordinates := self findCoordinatesIn: results forCountry: aCountry.
+    
+    coordinates ifNil: [
+        ^ 'No se encontraron coordenadas para ', aCity, ' en ', aCountry
+    ].
+    ^ coordinates.
+]
+
+{ #category : 'as yet unclassified' }
+Forecast >> getWeatherForCity: aCity country: aCountry [ 
+    | coordinates weatherData |
     coordinates := self getCoordinates: aCity country: aCountry.
     
-    coordinates ifNotNil: [
-        latitude := (coordinates key).
-        longitude := (coordinates value).
-        
-        weatherData := self getWeatherForCoordinates: (latitude asString) longitude: (longitude asString).
-        
-        ^ self generateDocument: weatherData
-
-    ] ifNil: [
+    coordinates ifNil: [
         ^ 'No se encontraron coordenadas para ', aCity, ' en ', aCountry.
     ].
+    
+    weatherData := (self webClient) fetchWeatherForLatitude: (coordinates key asString) longitude: (coordinates value asString).
+
+    ^ self generateWeatherDocumentFor: weatherData.
 ]
 
-{ #category : 'as yet unclassified' }
-Forecast >> getWeatherForCoordinates: latitude longitude: longitude [
-    | response weatherData |
-
-    response := (ZnClient new)
-        url: 'https://api.open-meteo.com/v1/forecast?latitude=',latitude,'&longitude=',longitude ,'&hourly=temperature_2m,relative_humidity_2m,rain&start_date=',Date today yyyymmdd,'&end_date=',Date today yyyymmdd;
-        get;
-        response.
-
-    weatherData := STONJSON fromString: response contents.
-    
-    ^ weatherData.
+{ #category : 'initialization' }
+Forecast >> initialize [ 
+	
+	super initialize.
+	self registerCommand: #slashWeather: to: '/weather'.
+	webClient := ForeCastWebClient instance
+	
 ]
 
 { #category : 'action' }
 Forecast >> slashHelp: aMessage [
-	^ aMessage answer: 'Ayuda'
+	| helpText |
+    helpText := 'Aquí tienes una lista de comandos que puedes usar:' , String lf ,
+                ' /start - Iniciar el bot y recibir una bienvenida' , String lf ,
+                ' /help - Ver este mensaje de ayuda' , String lf ,
+                ' /weather - Obtener el pronóstico del clima para una ciudad'.
+    ^ aMessage send: helpText.
 ]
 
 { #category : 'action' }
 Forecast >> slashStart: aMessage [
-	| array city country|
-	array := aMessage substrings:','.
-	city := array first.
-	country := array last.
-	^ self getWeatherForCity: city country: country 
+    | welcomeText |
+    welcomeText := '¡Bienvenido a ForecastBot! Soy tu bot de pronóstico del clima.' , String lf ,
+                   'Puedes pedirme el clima actual de cualquier ciudad del mundo.'.
+    ^ aMessage send: welcomeText .
+]
+
+{ #category : 'action' }
+Forecast >> slashWeather: aMessage [
+    "Inicia el proceso para manejar la entrada de ciudad y país de manera concurrente."
+		| city country |
+        
+        "Pregunta por la ciudad."
+        aMessage send: 'Ingrese una ciudad, por favor.'.
+
+        "Espera la respuesta del usuario con getUpdates."
+        city := self waitForCityResponse: aMessage. 
+			
+        "Pregunta por el país."
+        aMessage send: 'Ingrese un país, por favor.'.
+
+        "Espera la respuesta del usuario con getUpdates."
+        country := self waitForCountryResponse: aMessage.
+			
+        "Una vez que tenemos ciudad y país, obtenemos el clima."
+        aMessage send: (self getWeatherForCity: city country: country).
+]
+
+{ #category : 'as yet unclassified' }
+Forecast >> waitForCityResponse: aMessage [
+    | response cityResponse  |
+    Transcript show: 'Hola';cr.
+    "Esperar hasta recibir una respuesta de ciudad."
+    [
+        response := self getUpdates: true.  "Obtener las actualizaciones más recientes."
+        
+        response isEmpty ifFalse: [
+            "Solo intentar detectar si hay actualizaciones."
+				Transcript show: (response first text ~= '');cr.
+            cityResponse := response detect: [:each | each text ~= ''] ifNone: [nil].
+				Transcript show: cityResponse text;cr.
+        ].
+		  Transcript show: cityResponse;cr.
+        cityResponse notNil
+    ] whileFalse: [
+        "Sigue esperando hasta que haya una respuesta válida."
+        (Delay forSeconds: 1) wait.  "Evitar consumir recursos mientras espera."
+    ].
+    ^ cityResponse text.
+]
+
+{ #category : 'as yet unclassified' }
+Forecast >> waitForCountryResponse: aMessage [
+    | response countryResponse |
+	 Transcript show: 'Chau';cr.
+    "Esperar hasta recibir una respuesta de pais."
+    [
+        response := self getUpdates: true.  "Obtener las actualizaciones más recientes."
+        
+        response isEmpty ifFalse: [
+				
+            "Solo intentar detectar si hay actualizaciones."
+				Transcript show: (response first text ~= '');cr.
+            countryResponse := response detect: [:each | each text notEmpty] ifNone: [nil].
+				Transcript show: countryResponse text;cr.
+        ].
+		  Transcript show: countryResponse;cr.
+        countryResponse notNil
+    ] whileFalse: [
+        "Sigue esperando hasta que haya una respuesta válida."
+        (Delay forSeconds: 1) wait.  "Evitar consumir recursos mientras espera."
+    ].
+    ^ countryResponse text.
+]
+
+{ #category : 'accessing' }
+Forecast >> webClient [
+	^ webClient 
 ]
